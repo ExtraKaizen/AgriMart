@@ -2,13 +2,25 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ecommerce_app/models/cart_model.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:ecommerce_app/models/cart_model.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 class DbService {
-  User? user = FirebaseAuth.instance.currentUser;
+  User? user;
+
+  DbService() {
+    user = FirebaseAuth.instance.currentUser;
+  }
 
   // USER DATA
   // save user data after creating new account
   Future saveUserData({required String name, required String email}) async {
     try {
+      if (user == null) {
+        print("Error: User is not authenticated. Cannot save user data.");
+        return;
+      }
       Map<String, dynamic> data = {
         "name": name,
         "email": email,
@@ -188,6 +200,10 @@ class DbService {
 
   // read the order data of specific user
   Stream<QuerySnapshot> readOrders() {
+    if (user == null) {
+      print("User is not authenticated. Returning empty orders stream.");
+      return Stream.empty(); // Return an empty stream if user is null
+    }
     return FirebaseFirestore.instance
         .collection("shop_orders")
         .where("user_id", isEqualTo: user!.uid)

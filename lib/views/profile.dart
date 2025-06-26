@@ -42,7 +42,21 @@ class _ProfilePageState extends State<ProfilePage> {
       },),
       Divider( thickness: 1,  endIndent:  10, indent: 10,),
       ListTile(title: Text("Help & Support"), leading: Icon(Icons.support_agent), onTap: (){
-       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Mail us at ecommerce@shop.com")));
+       showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text("Contact Us"),
+            content: Text("You can contact us at AgriMartApp@gmail.com"),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                },
+                child: Text("OK"),
+              ),
+            ],
+          ),
+        );
       },),
       Divider( thickness: 1,  endIndent:  10, indent: 10,),
       ListTile(title: Text("Logout"), leading: Icon(Icons.logout_outlined), onTap: ()async{

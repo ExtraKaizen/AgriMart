@@ -9,6 +9,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class CheckoutPage extends StatefulWidget {
   const CheckoutPage({super.key});
@@ -24,23 +25,43 @@ class _CheckoutPageState extends State<CheckoutPage> {
   int toPay = 0;
   String discountText = "";
 
-  bool paymentSuccess=false;
-  Map<String,dynamic> dataOfOrder={};
+  bool paymentSuccess = false;
+  Map<String, dynamic> dataOfOrder = {};
+  bool _isDummyPayment = false; // New variable to control dummy payment flow
 
-    discountCalculator(int disPercent, int totalCost) {
+  discountCalculator(int disPercent, int totalCost) {
     discount = (disPercent * totalCost) ~/ 100;
-  setState(() {});
+    setState(() {});
   }
 
   Future<void> initPaymentSheet(int cost) async {
     try {
+      final bool useDummyPaymentEnv = dotenv.env["USE_DUMMY_PAYMENT"] == "true";
+      _isDummyPayment = useDummyPaymentEnv; // Set the state variable
+
+      if (_isDummyPayment) {
+        print("Dummy payment mode active. Skipping Stripe initialization.");
+        // In dummy mode, we don't need to initialize Stripe Payment Sheet
+        // The createPaymentIntent function will return a dummy response
+        await createPaymentIntent(
+            name: Provider.of<UserProvider>(context, listen: false).name,
+            address: Provider.of<UserProvider>(context, listen: false).address,
+            amount: (cost * 100).toString());
+        return;
+      }
+
       final user = Provider.of<UserProvider>(context, listen: false);
       // 1. create payment intent on the server
-      final data = await createPaymentIntent(name: user.name,address: user.address,
-      amount:  (cost*100).toString());
+      final data = await createPaymentIntent(
+          name: user.name, address: user.address, amount: (cost * 100).toString());
+
+      // Handle case where data might be null if createPaymentIntent failed
+      if (data == null) {
+        throw Exception("Failed to create payment intent.");
+      }
 
       // 2. initialize the payment sheet
-     await Stripe.instance.initPaymentSheet(
+      await Stripe.instance.initPaymentSheet(
         paymentSheetParameters: SetupPaymentSheetParameters(
           // Set to true for custom flow
           customFlow: false,
@@ -51,19 +72,16 @@ class _CheckoutPageState extends State<CheckoutPage> {
           customerEphemeralKeySecret: data['ephemeralKey'],
           customerId: data['id'],
           // Extra options
-          
-          
           style: ThemeMode.dark,
         ),
       );
-     
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error: $e')),
       );
       rethrow;
     }
-}
+  }
 
 
   @override
@@ -227,11 +245,10 @@ class _CheckoutPageState extends State<CheckoutPage> {
                 Provider.of<CartProvider>(context, listen: false).totalCost -
                     discount);
 
-try{
-  await Stripe.instance.presentPaymentSheet();
-
-  final cart = Provider.of<CartProvider>(context, listen: false);
-
+            if (_isDummyPayment) {
+              print("Dummy payment successful. Proceeding with order creation.");
+              // Directly proceed with order creation and cart clearing
+              final cart = Provider.of<CartProvider>(context, listen: false);
               User? currentUser = FirebaseAuth.instance.currentUser;
               List products = [];
 
@@ -247,12 +264,6 @@ try{
                 });
               }
 
-              // ORDER STATUS
-              // PAID - paid money by user
-              // SHIPPED - item shipped
-              // CANCELLED - item cancelled
-              // DELIVERED - order delivered
-
               Map<String, dynamic> orderData = {
                 "user_id": currentUser!.uid,
                 "name": user.name,
@@ -266,48 +277,114 @@ try{
                 "created_at": DateTime.now().millisecondsSinceEpoch
               };
 
-  dataOfOrder=orderData;
+              dataOfOrder = orderData;
 
+              await DbService().createOrder(data: orderData);
 
-  // creating new order
- await DbService().createOrder(data: orderData);
+              for (int i = 0; i < cart.products.length; i++) {
+                DbService().reduceQuantity(
+                    productId: cart.products[i].id,
+                    quantity: cart.carts[i].quantity);
+              }
 
-//  reduce the quantity of product on firestore
-   for (int i = 0; i < cart.products.length; i++) {
-    DbService().reduceQuantity(productId: cart.products[i].id, quantity: cart.carts[i].quantity);
-   }
+              await DbService().emptyCart();
 
-  // clear the cart for the user
- await DbService().emptyCart();
+              paymentSuccess = true;
 
-  paymentSuccess=true;
+              Navigator.pop(context);
 
-//  close the checkout page
-Navigator.pop(context);
-
-     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text(
                   "Payment Done",
                   style: TextStyle(color: Colors.white),
                 ),
                 backgroundColor: Colors.green,
               ));
+            } else {
+              // Real Stripe payment flow
+              try {
+                await Stripe.instance.presentPaymentSheet();
 
-}catch(e){
-     print("payment sheet error : $e");
-              print("payment sheet failed");
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(
-                  "Payment Failed",
-                  style: TextStyle(color: Colors.white),
-                ),
-                backgroundColor: Colors.redAccent,
-              ));
-}
+                final cart = Provider.of<CartProvider>(context, listen: false);
 
-if(paymentSuccess){
-  MailService().sendMailFromGmail(user.email, OrdersModel.fromJson(dataOfOrder, ""));
-}
+                User? currentUser = FirebaseAuth.instance.currentUser;
+                List products = [];
+
+                for (int i = 0; i < cart.products.length; i++) {
+                  products.add({
+                    "id": cart.products[i].id,
+                    "name": cart.products[i].name,
+                    "image": cart.products[i].image,
+                    "single_price": cart.products[i].new_price,
+                    "total_price":
+                        cart.products[i].new_price * cart.carts[i].quantity,
+                    "quantity": cart.carts[i].quantity
+                  });
+                }
+
+                // ORDER STATUS
+                // PAID - paid money by user
+                // SHIPPED - item shipped
+                // CANCELLED - item cancelled
+                // DELIVERED - order delivered
+
+                Map<String, dynamic> orderData = {
+                  "user_id": currentUser!.uid,
+                  "name": user.name,
+                  "email": user.email,
+                  "address": user.address,
+                  "phone": user.phone,
+                  "discount": discount,
+                  "total": cart.totalCost - discount,
+                  "products": products,
+                  "status": "PAID",
+                  "created_at": DateTime.now().millisecondsSinceEpoch
+                };
+
+                dataOfOrder = orderData;
+
+                // creating new order
+                await DbService().createOrder(data: orderData);
+
+                //  reduce the quantity of product on firestore
+                for (int i = 0; i < cart.products.length; i++) {
+                  DbService().reduceQuantity(
+                      productId: cart.products[i].id,
+                      quantity: cart.carts[i].quantity);
+                }
+
+                // clear the cart for the user
+                await DbService().emptyCart();
+
+                paymentSuccess = true;
+
+                //  close the checkout page
+                Navigator.pop(context);
+
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(
+                    "Payment Done",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  backgroundColor: Colors.green,
+                ));
+              } catch (e) {
+                print("payment sheet error : $e");
+                print("payment sheet failed");
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(
+                    "Payment Failed",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                  backgroundColor: Colors.redAccent,
+                ));
+              }
+            }
+
+            if (paymentSuccess) {
+              MailService().sendMailFromGmail(
+                  user.email, OrdersModel.fromJson(dataOfOrder, ""));
+            }
 
 
         },style: ElevatedButton.styleFrom(backgroundColor: Colors.blue,foregroundColor: Colors.white),),

@@ -64,34 +64,34 @@ class _OrdersPageState extends State<OrdersPage> {
       body: StreamBuilder(
         stream: DbService().readOrders(),
         builder: (context, snapshot) {
-          if (snapshot.hasData) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          } else if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}"));
+          } else if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return Center(
+              child: Text("No orders found or user not logged in."),
+            );
+          } else {
             List<OrdersModel> orders =
                 OrdersModel.fromJsonList(snapshot.data!.docs)
                     as List<OrdersModel>;
-            if (orders.isEmpty) {
-              return Center(
-                child: Text("No orders found"),
-              );
-            } else {
-              return ListView.builder(
-                itemCount: orders.length,
-                itemBuilder: (context, index) {
-                  return ListTile(
-                    onTap: () {
-                      Navigator.pushNamed(context, "/view_order",
-                          arguments: orders[index]);
-                    },
-                    title: Text(
-                        "${totalQuantityCalculator(orders[index].products)} Items Worth ₹ ${orders[index].total}"),
-                    subtitle: Text(
-                        "Ordered on ${DateTime.fromMillisecondsSinceEpoch(orders[index].created_at).toString()}"),
-                    trailing: statusIcon(orders[index].status),
-                  );
-                },
-              );
-            }
-          } else {
-            return Center(child: CircularProgressIndicator());
+            return ListView.builder(
+              itemCount: orders.length,
+              itemBuilder: (context, index) {
+                return ListTile(
+                  onTap: () {
+                    Navigator.pushNamed(context, "/view_order",
+                        arguments: orders[index]);
+                  },
+                  title: Text(
+                      "${totalQuantityCalculator(orders[index].products)} Items Worth ₹ ${orders[index].total}"),
+                  subtitle: Text(
+                      "Ordered on ${DateTime.fromMillisecondsSinceEpoch(orders[index].created_at).toString()}"),
+                  trailing: statusIcon(orders[index].status),
+                );
+              },
+            );
           }
         },
       ),
